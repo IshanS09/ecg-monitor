@@ -1,1 +1,849 @@
 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ECG Monitor — Heart of Gold</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --green:      #00e676;
+    --green-dim:  #00c853;
+    --green-glow: rgba(0,230,118,0.15);
+    --red:        #ff1744;
+    --amber:      #ffab00;
+    --blue:       #2979ff;
+    --bg:         #050a07;
+    --bg2:        #0a110c;
+    --bg3:        #0f1a11;
+    --border:     rgba(0,230,118,0.12);
+    --border2:    rgba(0,230,118,0.06);
+    --text:       #e8f5e9;
+    --text-dim:   #4a6350;
+    --text-mid:   #7a9b80;
+    --font-mono:  'JetBrains Mono', monospace;
+    --font-head:  'Syne', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-mono);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.08) 2px,
+      rgba(0,0,0,0.08) 4px
+    );
+    pointer-events: none;
+    z-index: 999;
+  }
+
+  /* Header */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 28px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg2);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .logo-icon {
+    width: 32px;
+    height: 32px;
+    position: relative;
+  }
+
+  .logo-icon svg { width: 32px; height: 32px; }
+
+  .logo-text {
+    font-family: var(--font-head);
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    color: var(--green);
+  }
+
+  .logo-sub {
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-top: 1px;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .status-pill {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-mid);
+  }
+
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    transition: background 0.3s;
+  }
+
+  .status-dot.live { background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse-dot 1.5s infinite; }
+  .status-dot.warn { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+  .status-dot.danger { background: var(--red); box-shadow: 0 0 8px var(--red); }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .elapsed {
+    font-size: 13px;
+    color: var(--text-mid);
+    font-weight: 300;
+  }
+
+  /* Main layout */
+  .main {
+    padding: 20px 24px;
+    display: grid;
+    grid-template-rows: auto auto auto;
+    gap: 16px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  /* Top vitals row */
+  .vitals {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+  }
+
+  .vital-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 18px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.3s;
+  }
+
+  .vital-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--green);
+    opacity: 0.4;
+  }
+
+  .vital-label {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+
+  .vital-value {
+    font-family: var(--font-head);
+    font-size: 32px;
+    font-weight: 800;
+    color: var(--green);
+    line-height: 1;
+    transition: color 0.3s;
+  }
+
+  .vital-value.warn { color: var(--amber); }
+  .vital-value.danger { color: var(--red); }
+  .vital-value.normal { color: var(--green); }
+
+  .vital-unit {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 4px;
+  }
+
+  .vital-sub {
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-top: 6px;
+  }
+
+  /* Beat flash animation */
+  @keyframes beat-flash {
+    0% { background: rgba(0,230,118,0.08); }
+    100% { background: var(--bg2); }
+  }
+
+  .beat-flash { animation: beat-flash 0.3s ease-out; }
+
+  /* ECG waveform panel */
+  .ecg-panel {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    position: relative;
+  }
+
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+
+  .panel-title {
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  .panel-tag {
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    letter-spacing: 0.08em;
+  }
+
+  .panel-tag.green { border-color: rgba(0,230,118,0.3); color: var(--green); }
+  .panel-tag.red { border-color: rgba(255,23,68,0.3); color: var(--red); }
+  .panel-tag.amber { border-color: rgba(255,171,0,0.3); color: var(--amber); }
+
+  canvas#ecg {
+    width: 100% !important;
+    height: 180px !important;
+    display: block;
+  }
+
+  /* Anomaly + alert bar */
+  .alert-bar {
+    margin-top: 10px;
+    padding: 8px 14px;
+    border-radius: 5px;
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    display: none;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .alert-bar.show { display: flex; }
+  .alert-bar.warn { background: rgba(255,171,0,0.08); border: 1px solid rgba(255,171,0,0.25); color: var(--amber); }
+  .alert-bar.danger { background: rgba(255,23,68,0.08); border: 1px solid rgba(255,23,68,0.25); color: var(--red); }
+  .alert-bar.info { background: rgba(0,230,118,0.06); border: 1px solid var(--border); color: var(--text-mid); }
+
+  /* Bottom row */
+  .bottom-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 280px;
+    gap: 16px;
+  }
+
+  .chart-panel {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+  }
+
+  canvas#bpmHistory { width: 100% !important; height: 140px !important; }
+  canvas#beatPattern { width: 100% !important; height: 140px !important; }
+
+  /* Controls panel */
+  .controls-panel {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .ctrl-btn {
+    width: 100%;
+    padding: 11px 16px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-mid);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-align: left;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .ctrl-btn:hover { border-color: rgba(0,230,118,0.3); color: var(--green); background: var(--green-glow); }
+  .ctrl-btn.active { border-color: var(--red); color: var(--red); background: rgba(255,23,68,0.08); }
+
+  .ctrl-btn span.icon { font-size: 14px; }
+
+  /* Training progress */
+  .train-section {
+    margin-top: 4px;
+  }
+
+  .train-label {
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .train-bar-wrap {
+    background: var(--bg3);
+    border-radius: 2px;
+    height: 4px;
+    overflow: hidden;
+    border: 1px solid var(--border2);
+  }
+
+  .train-bar {
+    height: 100%;
+    background: var(--green);
+    border-radius: 2px;
+    width: 0%;
+    transition: width 0.4s;
+  }
+
+  .train-bar.done { background: var(--green); box-shadow: 0 0 6px var(--green); }
+
+  /* Anomaly log */
+  .anomaly-log {
+    flex: 1;
+    overflow-y: auto;
+    font-size: 10px;
+    color: var(--text-dim);
+    line-height: 1.8;
+    max-height: 100px;
+    scrollbar-width: none;
+  }
+
+  .anomaly-entry { color: var(--red); }
+  .anomaly-entry::before { content: '⚡ '; }
+
+  /* Beat indicator */
+  .beat-indicator {
+    position: absolute;
+    top: 14px;
+    right: 20px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--green);
+    opacity: 0;
+    transition: opacity 0.05s;
+    box-shadow: 0 0 12px var(--green);
+  }
+
+  .beat-indicator.flash { opacity: 1; }
+
+  /* Lead off overlay */
+  #lead-off-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(5,10,7,0.85);
+    z-index: 500;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 16px;
+    font-family: var(--font-head);
+  }
+
+  #lead-off-overlay.show { display: flex; }
+
+  .lead-off-text {
+    font-size: 28px;
+    font-weight: 800;
+    color: var(--amber);
+    letter-spacing: 0.08em;
+  }
+
+  .lead-off-sub {
+    font-size: 13px;
+    color: var(--text-mid);
+    font-family: var(--font-mono);
+    letter-spacing: 0.06em;
+  }
+
+  /* Footer */
+  footer {
+    text-align: center;
+    padding: 12px;
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.08em;
+    border-top: 1px solid var(--border2);
+  }
+</style>
+</head>
+<body>
+
+<!-- Lead-off overlay -->
+<div id="lead-off-overlay">
+  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#ffab00" stroke-width="1.5">
+    <path d="M12 9v4M12 17h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+  </svg>
+  <div class="lead-off-text">LEAD OFF</div>
+  <div class="lead-off-sub">Check electrode connections and re-press pads</div>
+</div>
+
+<!-- Header -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">
+      <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M16 28s-12-7.5-12-16a7 7 0 0114 0 7 7 0 0114 0c0 8.5-12 16-12 16z" fill="none" stroke="#00e676" stroke-width="1.5"/>
+        <polyline points="4,16 8,16 10,10 12,22 14,14 16,18 18,16 28,16" fill="none" stroke="#00e676" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <div>
+      <div class="logo-text">Heart of Gold</div>
+      <div class="logo-sub">ECG Research Monitor</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="status-pill">
+      <div class="status-dot" id="status-dot"></div>
+      <span id="status-text">Connecting...</span>
+    </div>
+    <div class="elapsed" id="elapsed">00:00</div>
+  </div>
+</header>
+
+<!-- Main -->
+<div class="main">
+
+  <!-- Vitals row -->
+  <div class="vitals">
+    <div class="vital-card" id="bpm-card">
+      <div class="vital-label">Heart Rate</div>
+      <div class="vital-value" id="bpm-val">--</div>
+      <div class="vital-unit">BPM</div>
+      <div class="vital-sub" id="bpm-zone">Waiting...</div>
+    </div>
+    <div class="vital-card">
+      <div class="vital-label">Session Beats</div>
+      <div class="vital-value" id="beats-val">0</div>
+      <div class="vital-unit">total</div>
+      <div class="vital-sub" id="session-time">0:00 elapsed</div>
+    </div>
+    <div class="vital-card">
+      <div class="vital-label">Avg BPM</div>
+      <div class="vital-value" id="avg-bpm">--</div>
+      <div class="vital-unit">session avg</div>
+      <div class="vital-sub" id="bpm-range">-- / -- min/max</div>
+    </div>
+    <div class="vital-card">
+      <div class="vital-label">Anomalies</div>
+      <div class="vital-value" id="anomaly-val">0</div>
+      <div class="vital-unit">detected</div>
+      <div class="vital-sub" id="anomaly-pct">-- % of beats</div>
+    </div>
+    <div class="vital-card">
+      <div class="vital-label">Detector</div>
+      <div class="vital-value" id="detector-val" style="font-size:18px;margin-top:4px;">Training...</div>
+      <div class="vital-unit" id="detector-unit">collecting beats</div>
+      <div class="vital-sub" id="detector-sub">Needs 30 normal beats</div>
+    </div>
+  </div>
+
+  <!-- ECG waveform -->
+  <div class="ecg-panel">
+    <div class="panel-header">
+      <div class="panel-title">Live ECG Waveform — 250 Hz · 5s window</div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <div class="panel-tag" id="rhythm-tag">RHYTHM: --</div>
+        <div class="panel-tag" id="anomaly-tag">ANOMALY: OFF</div>
+      </div>
+    </div>
+    <div style="position:relative;">
+      <canvas id="ecg"></canvas>
+      <div class="beat-indicator" id="beat-dot"></div>
+    </div>
+    <div class="alert-bar" id="alert-bar">
+      <span id="alert-icon">⚠</span>
+      <span id="alert-msg"></span>
+    </div>
+  </div>
+
+  <!-- Bottom row -->
+  <div class="bottom-row">
+
+    <!-- BPM history -->
+    <div class="chart-panel">
+      <div class="panel-header">
+        <div class="panel-title">Heart Rate History</div>
+        <div class="panel-tag">Last 60 readings</div>
+      </div>
+      <canvas id="bpmHistory"></canvas>
+    </div>
+
+    <!-- Last beat waveform -->
+    <div class="chart-panel">
+      <div class="panel-header">
+        <div class="panel-title">Last Beat Pattern</div>
+        <div class="panel-tag" id="beat-tag">QRS COMPLEX</div>
+      </div>
+      <canvas id="beatPattern"></canvas>
+    </div>
+
+    <!-- Controls -->
+    <div class="controls-panel">
+      <div class="panel-title" style="margin-bottom:4px;">Controls</div>
+
+      <button class="ctrl-btn" id="record-btn" onclick="toggleRecord()">
+        <span class="icon">⏺</span> Start Recording
+      </button>
+
+      <a href="/download" class="ctrl-btn" style="text-decoration:none;">
+        <span class="icon">⬇</span> Download CSV
+      </a>
+
+      <div class="train-section">
+        <div class="train-label">
+          <span>Anomaly Detector</span>
+          <span id="train-pct">0%</span>
+        </div>
+        <div class="train-bar-wrap">
+          <div class="train-bar" id="train-bar"></div>
+        </div>
+      </div>
+
+      <div style="margin-top:4px;">
+        <div class="panel-title" style="margin-bottom:6px;">Anomaly Log</div>
+        <div class="anomaly-log" id="anomaly-log">
+          <div style="color:var(--text-dim);">No anomalies detected</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer>
+  Heart of Gold ECG Monitor · AD8232 + Arduino Uno · 250Hz · Built by Ishan Singh
+</footer>
+
+<script>
+// ── Socket ────────────────────────────────────────────────────────
+const socket = io();
+let connected = false;
+let recording = false;
+let bpmHistory = [];
+let lastBeatWindow = [];
+let anomalyLog = [];
+let minBpm = Infinity, maxBpm = 0;
+
+// ── ECG Canvas (custom renderer — faster than Chart.js for streaming) ──
+const ecgCanvas = document.getElementById('ecg');
+const ecgCtx    = ecgCanvas.getContext('2d');
+let ecgData     = new Array(1250).fill(0);
+let ecgAnomaly  = false;
+
+function resizeECG() {
+  ecgCanvas.width  = ecgCanvas.offsetWidth;
+  ecgCanvas.height = 180;
+}
+resizeECG();
+window.addEventListener('resize', resizeECG);
+
+function drawECG() {
+  const w = ecgCanvas.width, h = ecgCanvas.height;
+  ecgCtx.clearRect(0, 0, w, h);
+
+  // Grid
+  ecgCtx.strokeStyle = 'rgba(0,230,118,0.04)';
+  ecgCtx.lineWidth = 0.5;
+  for(let x = 0; x < w; x += w/20) { ecgCtx.beginPath(); ecgCtx.moveTo(x,0); ecgCtx.lineTo(x,h); ecgCtx.stroke(); }
+  for(let y = 0; y < h; y += h/6)  { ecgCtx.beginPath(); ecgCtx.moveTo(0,y); ecgCtx.lineTo(w,y); ecgCtx.stroke(); }
+  ecgCtx.strokeStyle = 'rgba(0,230,118,0.08)';
+  for(let x = 0; x < w; x += w/4) { ecgCtx.beginPath(); ecgCtx.moveTo(x,0); ecgCtx.lineTo(x,h); ecgCtx.stroke(); }
+
+  // Waveform
+  const color = ecgAnomaly ? '#ff1744' : '#00e676';
+  ecgCtx.strokeStyle = color;
+  ecgCtx.lineWidth = 1.5;
+  ecgCtx.shadowColor = color;
+  ecgCtx.shadowBlur = ecgAnomaly ? 8 : 4;
+  ecgCtx.lineJoin = 'round';
+  ecgCtx.beginPath();
+  const n = ecgData.length;
+  for(let i = 0; i < n; i++) {
+    const x = (i / n) * w;
+    const y = h/2 - (ecgData[i] / 2.0) * (h * 0.38);
+    if(i === 0) ecgCtx.moveTo(x, y);
+    else ecgCtx.lineTo(x, y);
+  }
+  ecgCtx.stroke();
+  ecgCtx.shadowBlur = 0;
+}
+
+// ── BPM History Chart ─────────────────────────────────────────────
+const bpmCtx = document.getElementById('bpmHistory').getContext('2d');
+const bpmChart = new Chart(bpmCtx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [{
+      data: [],
+      borderColor: '#00e676',
+      borderWidth: 1.5,
+      backgroundColor: 'rgba(0,230,118,0.06)',
+      fill: true,
+      tension: 0.4,
+      pointRadius: 0,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { display: false },
+      y: {
+        min: 40, max: 160,
+        grid: { color: 'rgba(0,230,118,0.05)' },
+        ticks: { color: '#4a6350', font: { family: 'JetBrains Mono', size: 9 } }
+      }
+    }
+  }
+});
+
+// ── Beat Pattern Chart ────────────────────────────────────────────
+const beatCtx = document.getElementById('beatPattern').getContext('2d');
+const beatChart = new Chart(beatCtx, {
+  type: 'line',
+  data: {
+    labels: [],
+    datasets: [{
+      data: [],
+      borderColor: '#2979ff',
+      borderWidth: 1.5,
+      backgroundColor: 'rgba(41,121,255,0.06)',
+      fill: true,
+      tension: 0.3,
+      pointRadius: 0,
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { display: false },
+      y: {
+        grid: { color: 'rgba(41,121,255,0.05)' },
+        ticks: { color: '#4a6350', font: { family: 'JetBrains Mono', size: 9 } }
+      }
+    }
+  }
+});
+
+// ── Socket events ─────────────────────────────────────────────────
+socket.on('connect', () => {
+  connected = true;
+  document.getElementById('status-dot').className = 'status-dot live';
+  document.getElementById('status-text').textContent = 'Live';
+});
+
+socket.on('disconnect', () => {
+  connected = false;
+  document.getElementById('status-dot').className = 'status-dot';
+  document.getElementById('status-text').textContent = 'Disconnected';
+});
+
+socket.on('ecg_data', (d) => {
+  // Append new samples
+  ecgData = [...ecgData, ...d.samples].slice(-1250);
+  ecgAnomaly = d.is_anomaly;
+  drawECG();
+
+  // Beat flash
+  if(d.is_beat) {
+    const dot = document.getElementById('beat-dot');
+    dot.classList.add('flash');
+    setTimeout(() => dot.classList.remove('flash'), 80);
+    document.getElementById('bpm-card').classList.add('beat-flash');
+    setTimeout(() => document.getElementById('bpm-card').classList.remove('beat-flash'), 300);
+    lastBeatWindow = d.samples;
+  }
+
+  // BPM
+  const bpm = d.bpm;
+  const bpmEl = document.getElementById('bpm-val');
+  bpmEl.textContent = bpm > 0 ? bpm : '--';
+  let zone = 'Normal', zoneClass = 'normal';
+  if(bpm > 0 && bpm < 50)       { zone = 'Bradycardia'; zoneClass = 'danger'; }
+  else if(bpm >= 50 && bpm < 60) { zone = 'Low normal'; zoneClass = 'normal'; }
+  else if(bpm >= 60 && bpm < 100){ zone = 'Normal'; zoneClass = 'normal'; }
+  else if(bpm >= 100)             { zone = 'Tachycardia'; zoneClass = 'warn'; }
+  bpmEl.className = `vital-value ${zoneClass}`;
+  document.getElementById('bpm-zone').textContent = zone;
+  document.getElementById('rhythm-tag').textContent = `RHYTHM: ${zone.toUpperCase()}`;
+  document.getElementById('rhythm-tag').className = `panel-tag ${zoneClass === 'danger' || zoneClass === 'warn' ? 'red' : 'green'}`;
+
+  // BPM history chart
+  if(d.bpm_history && d.bpm_history.length > 0) {
+    bpmChart.data.labels = d.bpm_history.map((_,i) => i);
+    bpmChart.data.datasets[0].data = d.bpm_history;
+    bpmChart.update('none');
+
+    const vals = d.bpm_history.filter(v => v > 0);
+    if(vals.length > 0) {
+      const avg = Math.round(vals.reduce((a,b)=>a+b,0)/vals.length);
+      const mn  = Math.min(...vals);
+      const mx  = Math.max(...vals);
+      document.getElementById('avg-bpm').textContent = avg;
+      document.getElementById('bpm-range').textContent = `${mn} / ${mx} min/max`;
+    }
+  }
+
+  // Beat pattern
+  if(d.is_beat && lastBeatWindow.length > 0) {
+    beatChart.data.labels = lastBeatWindow.map((_,i) => i);
+    beatChart.data.datasets[0].data = lastBeatWindow;
+    beatChart.data.datasets[0].borderColor = d.is_anomaly ? '#ff1744' : '#2979ff';
+    beatChart.data.datasets[0].backgroundColor = d.is_anomaly ? 'rgba(255,23,68,0.06)' : 'rgba(41,121,255,0.06)';
+    beatChart.update('none');
+    document.getElementById('beat-tag').textContent = d.is_anomaly ? '⚡ ANOMALY' : 'QRS COMPLEX';
+    document.getElementById('beat-tag').className = `panel-tag ${d.is_anomaly ? 'red' : ''}`;
+  }
+
+  // Session stats
+  document.getElementById('beats-val').textContent = d.session_beats;
+  document.getElementById('session-time').textContent = d.elapsed + ' elapsed';
+  document.getElementById('elapsed').textContent = d.elapsed;
+  document.getElementById('anomaly-val').textContent = d.anomaly_count;
+  const pct = d.session_beats > 0 ? ((d.anomaly_count/d.session_beats)*100).toFixed(1) : '--';
+  document.getElementById('anomaly-pct').textContent = `${pct}% of beats`;
+
+  // Detector status
+  if(d.trained) {
+    document.getElementById('detector-val').textContent = 'Active';
+    document.getElementById('detector-val').style.color = 'var(--green)';
+    document.getElementById('detector-unit').textContent = 'anomaly detection on';
+    document.getElementById('detector-sub').textContent = 'Trained on 30 beats';
+    document.getElementById('anomaly-tag').textContent = 'ANOMALY: ON';
+    document.getElementById('anomaly-tag').className = 'panel-tag green';
+  } else {
+    document.getElementById('detector-val').textContent = `${d.train_progress}%`;
+    document.getElementById('train-bar').style.width = d.train_progress + '%';
+    document.getElementById('train-pct').textContent = d.train_progress + '%';
+  }
+
+  // Anomaly log
+  if(d.is_anomaly) {
+    const now = new Date().toLocaleTimeString();
+    anomalyLog.unshift(`${now} — beat score anomalous`);
+    if(anomalyLog.length > 20) anomalyLog.pop();
+    const logEl = document.getElementById('anomaly-log');
+    logEl.innerHTML = anomalyLog.map(e => `<div class="anomaly-entry">${e}</div>`).join('');
+  }
+
+  // Alert bar
+  const alertBar = document.getElementById('alert-bar');
+  const alertMsg = document.getElementById('alert-msg');
+  if(d.lead_off) {
+    document.getElementById('lead-off-overlay').classList.add('show');
+  } else {
+    document.getElementById('lead-off-overlay').classList.remove('show');
+    if(bpm > 100) {
+      alertBar.className = 'alert-bar show danger';
+      alertMsg.textContent = `Tachycardia — ${bpm} bpm exceeds 100 bpm threshold`;
+    } else if(bpm > 0 && bpm < 50) {
+      alertBar.className = 'alert-bar show danger';
+      alertMsg.textContent = `Bradycardia — ${bpm} bpm below 50 bpm threshold`;
+    } else if(d.is_anomaly) {
+      alertBar.className = 'alert-bar show warn';
+      alertMsg.textContent = 'Anomalous beat detected — irregular QRS pattern';
+    } else {
+      alertBar.className = 'alert-bar';
+    }
+  }
+
+  // Status dot
+  if(d.lead_off) {
+    document.getElementById('status-dot').className = 'status-dot warn';
+    document.getElementById('status-text').textContent = 'Lead off';
+  } else if(bpm > 100 || (bpm > 0 && bpm < 50)) {
+    document.getElementById('status-dot').className = 'status-dot danger';
+    document.getElementById('status-text').textContent = 'Alert';
+  } else {
+    document.getElementById('status-dot').className = 'status-dot live';
+    document.getElementById('status-text').textContent = 'Live';
+  }
+
+  // Recording indicator
+  recording = d.recording;
+  const recBtn = document.getElementById('record-btn');
+  if(recording) {
+    recBtn.className = 'ctrl-btn active';
+    recBtn.innerHTML = '<span class="icon">⏹</span> Stop Recording';
+  } else {
+    recBtn.className = 'ctrl-btn';
+    recBtn.innerHTML = '<span class="icon">⏺</span> Start Recording';
+  }
+});
+
+function toggleRecord() {
+  socket.emit('toggle_record');
+}
+
+// Initial ECG draw
+drawECG();
+</script>
+</body>
+</html>
