@@ -9,10 +9,10 @@ Built as Research Officer at **Heart of Gold**, a student-led nonprofit focused 
 
 ## Demo
 
-![Web Dashboard]
+![Web Dashboard](Dashboard_Screenshot.png)
 *Live web dashboard — 55 BPM, clean QRS waveform, anomaly detector active*
 
-![OLED Display]
+![OLED Display](Final_Model.png)
 *Standalone OLED showing live BPM and mini ECG waveform*
 
 ---
